@@ -187,6 +187,22 @@ describe('signInWithOAuthAuthorizationCode', () => {
     });
   });
 
+  it('should reject a token response without access_token', async () => {
+      await renderUseSignInOAuthToPopulateGlobalConfig();
+      mockApi.use(
+        http.post(defaultConfig.discovery.tokenEndpoint!, () => {
+          return HttpResponse.json({ token: 'missing' });
+        })
+      );
+      const response = signInWithOAuthAuthorizationCode(
+        'test-code',
+        'test-csrf-state'
+      );
+      await expect(response).rejects.toThrow(
+        'Token response did not contain a valid access_token'
+      );
+  });
+
   it('should successfully obtain a session and return an accessToken', async () => {
     await renderUseSignInOAuthToPopulateGlobalConfig();
     const response = signInWithOAuthAuthorizationCode(
