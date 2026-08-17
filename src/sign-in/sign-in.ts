@@ -10,15 +10,32 @@ import {
 // This is needed to support iOS 17.3 and below
 let globalSignInOAuthConfig: GlobalSignInOAuthConfig | null = null;
 
+type OAuthTokenResponse = {
+  access_token: string;
+};
+
+const oauthTransactions = new Map<string, GlobalSignInOAuthConfig>();
+
+function isOAuthTokenResponse(value: unknown): value is OAuthTokenResponse {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const accessToken = (value as { access_token?: unknown }).access_token;
+  return typeof accessToken === 'string' && accessToken.length > 0;
+}
+
 export const signInWithOAuthAuthorizationCode = async (
   authorizationCode: string | undefined,
   csrfState: string | undefined
 ) => {
-  if (!globalSignInOAuthConfig) {
+  const transaction =
+    (csrfState && oauthTransactions.get(csrfState)) ?? globalSignInOAuthConfig;
+
+  if (!transaction) {
     throw new Error('No globalSignInOAuthConfig');
   }
 
-  if (!globalSignInOAuthConfig.discovery.tokenEndpoint) {
+  if (!transaction.discovery.tokenEndpoint) {
     throw new Error('No discovery token endpoint');
   }
 
@@ -26,25 +43,26 @@ export const signInWithOAuthAuthorizationCode = async (
     throw new Error('No authorization code');
   }
 
-  if (!csrfState || csrfState !== globalSignInOAuthConfig.csrfState) {
+  if (!csrfState || csrfState !== transaction.csrfState) {
     throw new Error('Failed CSRF check');
   }
+  oauthTransactions.delete(transaction.csrfState);
 
   const response = await fetch(
-    globalSignInOAuthConfig.discovery.tokenEndpoint,
+    transaction.discovery.tokenEndpoint,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Authorization': `Basic ${Buffer.from(
-          `${globalSignInOAuthConfig.clientId}:`
+          `${transaction.clientId}:`
         ).toString('base64')}`,
       },
       body: new URLSearchParams({
         code: authorizationCode,
         grant_type: 'authorization_code',
-        redirect_uri: globalSignInOAuthConfig.redirectUri,
-        code_verifier: globalSignInOAuthConfig.codeVerifier,
+        redirect_uri: transaction.redirectUri,
+        code_verifier: transaction.codeVerifier,
       }).toString(),
     }
   );
@@ -53,7 +71,11 @@ export const signInWithOAuthAuthorizationCode = async (
     throw new Error('Failed to get access token');
   }
 
-  const { access_token: accessToken } = await response.json();
+  const tokenResponse: unknown = await response.json();
+  if (!isOAuthTokenResponse(tokenResponse)) {
+    throw new Error('Token response did not contain a valid access_token');
+  }
+  const accessToken = tokenResponse.access_token;
 
   return {
     data: {
@@ -88,6 +110,8 @@ export const useSignInOAuth = ({ discovery, ...config }: SignInOAuthConfig) => {
       };
     }
 
+    let transactionState: string | undefined;
+
     try {
       setIsLoading(true);
 
@@ -107,12 +131,15 @@ export const useSignInOAuth = ({ discovery, ...config }: SignInOAuthConfig) => {
         throw new Error('No discovery token endpoint');
       }
 
-      globalSignInOAuthConfig = {
+      const transaction: GlobalSignInOAuthConfig = {
         ...config,
         discovery,
         codeVerifier,
         csrfState: requestCsrfState,
       };
+      transactionState = requestCsrfState;
+      globalSignInOAuthConfig = transaction;
+      oauthTransactions.set(requestCsrfState, transaction);
 
       const oAuthResponse = await request.promptAsync(discovery);
 
@@ -143,6 +170,9 @@ export const useSignInOAuth = ({ discovery, ...config }: SignInOAuthConfig) => {
         originalError: error,
       };
     } finally {
+      if (transactionState) {
+        oauthTransactions.delete(transactionState);
+      }
       setIsLoading(false);
     }
   }, [discovery, request, config]);

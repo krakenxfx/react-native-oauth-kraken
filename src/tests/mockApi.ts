@@ -1,4 +1,4 @@
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse, type RequestHandler } from 'msw';
 import { setupServer } from 'msw/node';
 
 const handlers = [
@@ -12,7 +12,7 @@ export const mockApi = setupServer(...handlers);
 
 export const createMockApi = () => {
   const apiInstance = {
-    use: (handler: any) => {
+    use: (handler: RequestHandler) => {
       mockApi.use(handler);
     },
     resetHandlers: () => {
